@@ -92,7 +92,7 @@
         },
 
         _didCollide: function(bn) {
-            return Utils.isIntercepted({x: this.n.x, y: this.newY, width: this.n.width, height: this.n.height}, bn);
+            return bn != this.n && Utils.isIntercepted({x: this.n.x, y: this.newY, width: this.n.width, height: this.n.height}, bn);
         },
 
         _isAddNodeIntercepted: function(n) {
@@ -160,7 +160,8 @@
         return _.find(this.nodes, function(n) { return el.get(0) === n.el.get(0); });
     };
 
-    GridStackEngine.prototype._fixCollisions = function(node) {
+    // if behind if true, collisionNode will always be placed behind node
+    GridStackEngine.prototype._fixCollisions = function(node, behind) {
         var self = this;
         this._sortNodes(-1);
 
@@ -170,12 +171,63 @@
             nn = {x: 0, y: node.y, width: this.width, height: node.height};
         }
         while (true) {
-            var collisionNode = _.find(this.nodes, _.bind(Utils._collisionNodeCheck, {node: node, nn: nn}));
-            if (typeof collisionNode == 'undefined') {
+            var collisionNodeList = _.filter(this.nodes, _.bind(Utils._collisionNodeCheck, {node: node, nn: nn}));
+            if (!collisionNodeList || collisionNodeList.length == 0) {
                 return;
             }
-            this.moveNode(collisionNode, collisionNode.x, node.y + node.height,
-                collisionNode.width, collisionNode.height, true);
+            var collisionNode = collisionNodeList[0];
+            if (!behind) {
+                _.each(collisionNodeList, function (cnode) {
+                    if (node.x >= cnode.x && node.x < cnode.x + cnode.width
+                      && node.y > cnode.y && node.y < cnode.y + cnode.height) { // node's topLeft point is inside cnode
+                        collisionNode = cnode;
+                        return;
+                    }
+
+                    ////find the nearest one
+                    //if (Math.abs(node._beforeDragY - cnode.y) < Math.abs(node._beforeDragY - collisionNode.y)) {
+                    //    collisionNode = cnode;
+                    //}
+                });
+            }
+            if (behind) {
+                this.moveNode(collisionNode, collisionNode.x, node.y + node.height,
+                  collisionNode.width, collisionNode.height, true, true);
+            } else { //collision caused by dragging
+                if (node.y < collisionNode.y + collisionNode.height / 2) { //node should be before collisionNode
+                    if (node._beforeDragY > collisionNode.y) {
+                        this.moveNode(collisionNode, collisionNode.x, node.y + node.height,
+                          collisionNode.width, collisionNode.height, true, true);
+                    } else {
+                        if (collisionNode.y - node.height >= 0) {
+                            var targetNode = {
+                                x: node.x,
+                                y: collisionNode.y - node.height,
+                                width: node.width,
+                                height: node.height
+                            };
+                            var collisionTargetNode = _.find(this.nodes,
+                              _.bind(Utils._collisionNodeCheck, {node: node, nn: targetNode}));
+                            if (!collisionTargetNode) { //can place at target
+                                this.moveNode(node, node.x, collisionNode.y - node.height,
+                                  node.width, node.height, true, true);
+                                break;
+                            } else { // place collisionNode after node
+                                this.moveNode(collisionNode, collisionNode.x, node.y + node.height,
+                                  collisionNode.width, collisionNode.height, true, true);
+                            }
+                        } else {
+                            this.moveNode(collisionNode, collisionNode.x, node.y + node.height,
+                              collisionNode.width, collisionNode.height, true, true);
+                        }
+                    }
+
+                } else { //node should be after collisionNode
+                    this.moveNode(node, node.x, collisionNode.y + collisionNode.height,
+                      node.width, node.height, true, true);
+                    break;
+                }
+            }
         }
     };
 
@@ -335,7 +387,7 @@
             this._addedNodes.push(_.clone(node));
         }
 
-        this._fixCollisions(node);
+        this._fixCollisions(node, true);
         this._packNodes();
         this._notify();
         return node;
@@ -406,7 +458,7 @@
         return clone.getGridHeight() <= this.height;
     };
 
-    GridStackEngine.prototype.moveNode = function(node, x, y, width, height, noPack) {
+    GridStackEngine.prototype.moveNode = function(node, x, y, width, height, noPack, behindMode) {
         if (typeof x != 'number') { x = node.x; }
         if (typeof y != 'number') { y = node.y; }
         if (typeof width != 'number') { width = node.width; }
@@ -421,7 +473,7 @@
             return node;
         }
 
-        var resizing = node.width != width;
+        var resizing = node.width != width || node.height != height;
         node._dirty = true;
 
         node.x = x;
@@ -431,7 +483,7 @@
 
         node = this._prepareNode(node, resizing);
 
-        this._fixCollisions(node);
+        this._fixCollisions(node, resizing || behindMode); //recursive
         if (!noPack) {
             this._packNodes();
             this._notify();
